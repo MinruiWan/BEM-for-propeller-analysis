@@ -1,0 +1,92 @@
+clc;
+clear;
+close all;
+
+% BEM calculation of xprop
+% Assumptions: 1. uniform annulus induce flow factor; 
+%              2.
+%function bem = BEM()
+load(FLAPERON.root + "\data\xprop\xprop_profile_data.mat", "profile_data");
+load(FLAPERON.root + "\data\xprop\xprop_section_data.mat", "section_data");
+load(FLAPERON.root + "\data\xprop\xprop_aero_data.mat", "aero_data");
+fields = fieldnames(section_data);
+
+%% User input
+inp = struct;
+inp.Uinf  = 150; %[m/s]
+inp.Omega = 1000; %[RPM]
+inp.aoa = 0;   %[deg]
+inp.alt   = 300; %[m]
+inp.rey   = 10E5;
+inp.airfoils = 25;
+inp.num_blade = 6;
+rho = 1.225*(1- 2.25577E-5 * inp.alt)^4.258; %[kg/m3]
+%% Blade geometry
+R_root = 40.2; % mm                              *should be taken from profile_data*
+R_tip = 203.2;  % mm                             *~*
+R_cen = (R_root + R_tip)/2;
+% calculat tip speed ratio 
+TSR = inp.Omega * R_tip / inp.Uinf;
+% calculate the pitch of airfoil sections 
+for i = inp.airfoils:-1:1
+    y(i) = section_data(i).r * 1e-3;
+    pitch(i) = section_data(i).twist * pi/180; %[rad]
+end
+% Relate the input Rey to the Rey in aero_data.rey
+rey_diff = abs(aero_data.rey - inp.rey);
+[~, index_rey] = min(rey_diff);
+% Relate the input AoA to the AoA in aero_data.alpha
+aoa_diff = abs(aero_data.alpha - inp.aoa);
+[~, index_aoa] = min(aoa_diff);
+% Extract the Cl and Cd data for the given aoa and rey
+Cl = aero_data.Cl(:,index_rey,:);
+Cd = aero_data.Cd(:,index_rey,:);
+
+%% Blade Element 
+% initial value of a and a'
+Area = pi *(R_tip^2 - R_root^2)*10^(-6);
+a1 = 0;   % axial induction 
+a2  = 0;  % tangential induction factor
+n = inp.Omega/(2*pi) ; % rotational speed
+% number of iteration to renew induction factor
+N_iteration = 200;
+N_section = 100;
+% tolerance for inductin factor
+Error_iter = 1*10^-5;
+
+for i = 1:1:N_iteration                       %*new induction factor for each iteration *
+    
+    
+    
+    % Split the blade into N_section number of sections 
+    [Thrust, Fq] = Bladeloading(N_section, R_tip, R_root, section_data, aero_data,...
+                 a1, a2, rho, index_rey, inp.Uinf, inp.Omega, inp.num_blade);
+    % Thrust coefficient
+    CT = Thrust / (0.5 * Area * rho *inp.Uinf^2);
+
+    
+    % correct new axial induction with Prandtl's correction 
+    [Prandtl, Ftip, Froot] = PrandtlTipRootCorrection(R_cen/R_tip, R_root, ...
+          R_tip, TSR, inp.num_blade, a1);
+    if Prandtl < 0.0001
+        Prandtl = 0.0001;
+    end
+    
+    anew = ainduction(CT);
+   
+    % for improving convergence, weigh current and previous iteration
+    a1 = 0.75 * a1 + 0.25 * anew;
+    % calculate aximuthal induction
+    a2 = Fq / (2*pi*inp.Uinf*(1-a1)*inp.Omega*2*R_cen^2);
+
+    if abs(a1 - anew) < Error_iter
+        fprintf('Iteration: %d\n', i);
+        fprintf('a1: %d\n',a1);
+        fprintf('anew: %d\n',anew);
+        break
+    end
+end
+
+fprintf("Total Thrust: %d\n", Thrust);
+fprintf("CT: %d\n", CT);
+fprintf("Advance ratio J: %d\n", inp.Uinf/(n*2*R_tip*10^(-3)));
